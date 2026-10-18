@@ -8,3 +8,4 @@
 *.postbox.json
 auth-*.pending
 *.lockfile
+config.json

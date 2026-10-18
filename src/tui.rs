@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -17,6 +17,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     api::{Credentials, TanMethod},
+    config::ConfigStore,
     safety::Safety,
     sync::{DocumentRow, Update, Worker},
 };
@@ -45,6 +46,7 @@ struct App {
     method: TanMethod,
     quitting: bool,
     demo: bool,
+    config: Option<ConfigStore>,
 }
 
 impl App {
@@ -66,6 +68,7 @@ impl App {
             method,
             quitting: false,
             demo,
+            config: None,
         };
         if demo {
             app.screen = Screen::Finished;
@@ -104,6 +107,25 @@ impl App {
             app.table.select(Some(0));
         }
         app
+    }
+
+    fn configure(&mut self, store: ConfigStore) -> Result<()> {
+        let mut saved = store.load()?;
+        if matches!(self.screen, Screen::Unlock) {
+            *self.inputs[0] = std::mem::take(&mut saved.username);
+            self.focus = usize::from(!self.inputs[0].is_empty());
+        } else {
+            *self.inputs[0] = std::mem::take(&mut saved.client_id);
+            *self.inputs[1] = std::mem::take(&mut saved.client_secret);
+            *self.inputs[2] = std::mem::take(&mut saved.username);
+            self.focus = self.inputs[..3]
+                .iter()
+                .position(|input| input.is_empty())
+                .unwrap_or(3);
+            self.status = "F5 speichert API-Zugang und Zugangsnummer lokal. PIN und TAN werden nicht gespeichert. Noch keine Bankverbindung.".into();
+        }
+        self.config = Some(store);
+        Ok(())
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -207,7 +229,7 @@ impl App {
         let block = Block::bordered().title(if unlock {
             " Lokale Anmeldesicherung "
         } else {
-            " Zugangsdaten · nur im Arbeitsspeicher "
+            " Zugangsdaten · PIN nur im Arbeitsspeicher "
         });
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -396,11 +418,19 @@ pub fn run(
     unlock: bool,
     demo: bool,
     safety: Option<Arc<Safety>>,
+    config: Option<ConfigStore>,
 ) -> Result<()> {
+    let mut app = App::new(output, method, unlock, demo);
+    if let Some(store) = config {
+        app.configure(store)?;
+    }
     let mut terminal = ratatui::try_init().context("Terminal konnte nicht gestartet werden")?;
     let _restore = RestoreTerminal;
-    let mut app = App::new(output, method, unlock, demo);
-    event_loop(&mut terminal, &mut app, safety)
+    event_loop(&mut terminal, &mut app, safety)?;
+    if app.failed && matches!(app.screen, Screen::Finished) {
+        bail!(app.status);
+    }
+    Ok(())
 }
 
 fn event_loop(
@@ -502,6 +532,15 @@ fn event_loop(
                             continue;
                         }
                         let state = safety.as_ref().context("Lokaler Zustand fehlt")?.clone();
+                        if let Some(store) = &app.config
+                            && let Err(error) = store.save(&credentials)
+                        {
+                            app.failed = true;
+                            app.status = format!(
+                                "Konfiguration konnte nicht gespeichert werden: {error:#}. Keine Bankanfrage gesendet."
+                            );
+                            continue;
+                        }
                         app.inputs.iter_mut().for_each(|input| input.zeroize());
                         worker = Some(Worker::start(
                             state,
@@ -552,6 +591,42 @@ fn event_loop(
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn saved_credentials_prefill_the_form_but_pin_is_always_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let credentials = Credentials {
+            client_id: "SAVED_CLIENT_ID".into(),
+            client_secret: "SAVED_CLIENT_SECRET".into(),
+            username: "12345678".into(),
+            pin: "NEVER_LOAD_PIN".into(),
+        };
+        ConfigStore::new(path.clone()).save(&credentials).unwrap();
+        let mut app = App::new("postbox".into(), TanMethod::Push, false, false);
+        app.configure(ConfigStore::new(path.clone())).unwrap();
+        assert_eq!(*app.inputs[0], credentials.client_id);
+        assert_eq!(*app.inputs[1], credentials.client_secret);
+        assert_eq!(*app.inputs[2], credentials.username);
+        assert!(app.inputs[3].is_empty());
+        assert_eq!(app.focus, 3);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!text.contains("SAVED_CLIENT"));
+        assert!(!text.contains("12345678"));
+        let mut unlock = App::new("postbox".into(), TanMethod::Push, true, false);
+        unlock.configure(ConfigStore::new(path)).unwrap();
+        assert_eq!(*unlock.inputs[0], credentials.username);
+        assert!(unlock.inputs[1].is_empty());
+        assert_eq!(unlock.focus, 1);
+    }
 
     #[test]
     fn credentials_are_masked_and_german_screens_render() {

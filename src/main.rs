@@ -1,5 +1,6 @@
 mod api;
 mod archive;
+mod config;
 mod model;
 mod safety;
 mod sync;
@@ -23,7 +24,7 @@ use api::TanMethod;
     disable_help_flag = true,
     disable_version_flag = true,
     about = "comdirect Postbox inkrementell als PDF archivieren",
-    long_about = "Deutsche Terminal-Oberfläche zur comdirect Postbox.\nZugangsdaten werden interaktiv abgefragt und nicht gespeichert.\nDownloads markieren Dokumente bei comdirect als gelesen.",
+    long_about = "Deutsche Terminal-Oberfläche zur comdirect Postbox.\nAPI-Zugang und Zugangsnummer werden lokal gespeichert; PIN und TAN bleiben interaktiv.\nDownloads markieren Dokumente bei comdirect als gelesen.",
     help_template = "{about-with-newline}\nVerwendung: comdirect-postbox-rs [OPTIONEN]\n\nOptionen:\n{options}"
 )]
 struct Args {
@@ -35,6 +36,9 @@ struct Args {
         hide_default_value = true
     )]
     output: PathBuf,
+    /// Konfigurationsdatei (Standard: config.json im lokalen Konfigurationsverzeichnis)
+    #[arg(long, value_name = "DATEI")]
+    config: Option<PathBuf>,
     /// TAN-Verfahren: push (Standard, photoTAN-App) oder sms (mobileTAN, falls freigeschaltet)
     #[arg(
         long,
@@ -75,14 +79,17 @@ fn run() -> Result<()> {
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         "Bitte in einem interaktiven Terminal starten (Hilfe: --help)"
     );
-    let state = if args.demo {
-        None
+    let (state, config) = if args.demo {
+        (None, None)
     } else {
         let directories = ProjectDirs::from("de", "comdirect-postbox-rs", "comdirect-postbox-rs")
             .context("Lokales Anwendungsverzeichnis nicht verfügbar")?;
-        Some(Arc::new(safety::Safety::open(
-            directories.data_local_dir(),
-        )?))
+        let state = Arc::new(safety::Safety::open(directories.data_local_dir())?);
+        let config = config::ConfigStore::new(
+            args.config
+                .unwrap_or_else(|| directories.config_local_dir().join("config.json")),
+        );
+        (Some(state), Some(config))
     };
-    tui::run(args.output, args.tan, args.unlock, args.demo, state)
+    tui::run(args.output, args.tan, args.unlock, args.demo, state, config)
 }

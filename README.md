@@ -26,16 +26,51 @@ Mit `cargo run --locked -- --demo` kannst du die Oberfläche ohne Bankverbindung
 
 ## Anmeldung und Bedienung
 
-Du benötigst einen freigeschalteten comdirect-API-Zugang mit **Client-ID** und **Client-Secret**, deine achtstellige Zugangsnummer und deine PIN. API-Zugangsdaten sind separat vom Bankzugang. Alle vier Felder werden verdeckt eingegeben. Die App speichert keine Zugangsdaten oder Tokens in Dateien und führt keine Hintergrundanmeldungen aus.
+Du benötigst einen freigeschalteten comdirect-API-Zugang mit **Client-ID** und **Client-Secret**, deine achtstellige Zugangsnummer und deine PIN. API-Zugangsdaten sind separat vom Bankzugang. Alle vier Felder werden verdeckt eingegeben. Client-ID, Client-Secret und Zugangsnummer werden in einer lokalen Konfigurationsdatei gespeichert. **PIN, TAN und Tokens werden nicht gespeichert.**
 
 1. Felder mit `Tab` wechseln; `Umschalt+Tab` wechselt zurück. `Strg+U` leert das aktuelle Feld.
-2. Mit `F5` genau eine Anmeldung und anschließend die Archivierung starten.
+2. Mit `F5` die drei Konfigurationswerte speichern und genau eine Anmeldung mit anschließender Archivierung starten. Bei weiteren Programmstarts sind diese Felder bereits ausgefüllt und der Fokus liegt direkt auf der PIN. Änderungen an den drei Werten werden beim nächsten `F5` übernommen.
 3. Standardmäßig die Anmeldung in der **photoTAN-App** freigeben und **erst nach der Freigabe** in der TUI `Enter` drücken. Es wird nicht automatisch auf Freigabe geprüft.
 4. Die TUI zeigt neue, vorhandene und nicht als PDF verfügbare Dokumente an. Mit `↑`/`↓` navigieren; `Esc` oder `Q` beendet den Vorgang kontrolliert. Laufende HTTP-Anfragen können bis zu 60 Sekunden und die anschließende Abmeldung nochmals bis zu 60 Sekunden dauern.
 
 Für ein bereits bei comdirect freigeschaltetes mobileTAN-Verfahren gibt es `--tan sms`. Die sechsstellige TAN wird einmalig gesendet. Ein automatischer Wechsel des Verfahrens oder die Anzeige einer photoTAN-Scan-Grafik ist nicht implementiert.
 
 **Der API-Download markiert ungelesene Dokumente bei comdirect als gelesen.** Die Anwendung löscht oder verschiebt keine Dokumente auf dem Bankserver. Nicht-PDF-Dokumente und HTML-Vorschaltseiten werden nicht heruntergeladen.
+
+## Konfigurationsdatei
+
+Die App legt `config.json` beim ersten Start mit `F5` an, bevor eine Bankanfrage gesendet wird. Das geschieht auch dann, wenn die anschließende Anmeldung oder der Download fehlschlägt. Beim nächsten Programmstart werden die Werte automatisch geladen. Ein Abbruch vor `F5` speichert keine Änderungen.
+
+| System | Standardpfad |
+| --- | --- |
+| Linux | `~/.config/comdirect-postbox-rs/config.json` (bzw. unter `XDG_CONFIG_HOME`) |
+| Windows | `%LOCALAPPDATA%\comdirect-postbox-rs\comdirect-postbox-rs\config\config.json` |
+
+Einen anderen Pfad kannst du mit `--config` wählen:
+
+```bash
+cargo run --release --locked -- --config ./config.json
+```
+
+Die Datei kann auch manuell als UTF-8-JSON angelegt werden. Die Schlüssel sind Englisch; alle Werte sind Zeichenketten, damit beispielsweise führende Nullen der Zugangsnummer erhalten bleiben:
+
+```json
+{
+  "client_id": "DEINE_CLIENT_ID",
+  "client_secret": "DEIN_CLIENT_SECRET",
+  "username": "12345678"
+}
+```
+
+Das Client-Secret steht **im Klartext** in dieser Datei. Unter Linux schreibt die App sie atomar mit Dateirechten `0600`; neu angelegte Konfigurationsverzeichnisse erhalten `0700`. Unter Windows gelten die Zugriffsrechte des Zielordners. `config.json` ist durch `.gitignore` ausgeschlossen. Individuell benannte Konfigurationsdateien ebenfalls außerhalb der Versionsverwaltung aufbewahren. Beim Speichern werden genau die drei genannten Werte geschrieben, keine PIN oder TAN. Ist die Datei ungültig oder nicht beschreibbar, erfolgt keine Anmeldung. Die Offline-Demo liest oder schreibt auch bei Angabe von `--config` keine Konfigurationsdatei.
+
+Der Konfigurationspfad hat keinen Einfluss auf die lokale Anmeldesicherung. Ein Wechsel der Konfiguration hebt diese Sicherung nicht auf.
+
+## Fehlermeldungen und HTTP 406
+
+Fehler zeigen den HTTP-Status und den betroffenen API-Pfad an. Beim Schließen einer fehlgeschlagenen Archivierung bleibt die Meldung zusätzlich im normalen Terminal sichtbar; das Programm endet mit Fehlercode `1`. Zugangsdaten, Tokens, TANs und Antwortinhalte werden dabei nicht ausgegeben.
+
+HTTP `406` beim Dokumentabruf bedeutet laut API-Spezifikation, dass das angeforderte Antwortformat nicht akzeptiert wird. Version **0.2.0** korrigiert einen Fehler, bei dem sowohl JSON als auch PDF im `Accept`-Header standen: PDF-Downloads senden jetzt ausschließlich `Accept: application/pdf`, die übrigen Anfragen ausschließlich `application/json`. Ein Formatfehler wird nicht durch zusätzliche Anmelde- oder TAN-Versuche behandelt. Vorhandene vollständige Archivdateien werden beim nächsten Start weiterhin erkannt.
 
 ## Archiv und Originaldatum
 
@@ -87,7 +122,7 @@ Sicherungsdateien enthalten einen Hash der Zugangsnummer, keine PIN oder Tokens.
 
 ## Entwicklung und Prüfungen
 
-Code und Bezeichner sind Englisch, Dokumentation und Oberfläche Deutsch. Die Architektur trennt API (`src/api.rs`), Archiv (`src/archive.rs`), Anmeldesicherung (`src/safety.rs`), Hintergrundablauf (`src/sync.rs`) und TUI (`src/tui.rs`).
+Code und Bezeichner sind Englisch, Dokumentation und Oberfläche Deutsch. Die Architektur trennt API (`src/api.rs`), Konfiguration (`src/config.rs`), Archiv (`src/archive.rs`), Anmeldesicherung (`src/safety.rs`), Hintergrundablauf (`src/sync.rs`) und TUI (`src/tui.rs`).
 
 ```bash
 cargo fmt --all --check
@@ -95,7 +130,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
+Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
 
 Die lokale Datei `comdirect_REST_API_Dokumentation.pdf` ist die fachliche Grundlage (Kapitel 1–3 und 9) und wird über `.gitignore` ausgeschlossen. Sie ist kein Bestandteil des Repositories. Die Seitenparameter `paging-first` und `paging-count` folgen der comdirect-Paging-Konvention; die App prüft den zurückgegebenen Index und bricht bei widersprüchlichen oder wiederholten Seiten ab. Die bereitgestellte PDF führt diese Query-Parameter für Dokumente nicht ausdrücklich auf; dieses Verhalten muss bei einem echten Abruf bestätigt werden. Die allgemeine Paging-Konvention erläutert auch ein [Beitrag der comdirect-Fachabteilung](https://community.comdirect.de/t5/website-apps/rest-api-filter-parameter/td-p/108710/page/3).
 
