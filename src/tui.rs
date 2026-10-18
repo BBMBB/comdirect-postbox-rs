@@ -19,7 +19,7 @@ use crate::{
     api::{Credentials, TanMethod},
     config::ConfigStore,
     safety::Safety,
-    sync::{DocumentRow, Update, Worker},
+    sync::{Command, DocumentRow, Inventory, Update, Worker},
 };
 
 const ACCENT: Color = Color::Rgb(235, 211, 79);
@@ -28,6 +28,7 @@ const MUTED: Color = Color::Rgb(153, 166, 181);
 enum Screen {
     Login,
     Busy,
+    Overview { inventory: Inventory },
     Challenge { sms: bool },
     Finished,
     Unlock,
@@ -71,14 +72,12 @@ impl App {
             config: None,
         };
         if demo {
-            app.screen = Screen::Finished;
-            app.status = "Offline-Demo · 2 neu gespeichert, 1 vorhanden und geprüft · keine Bankverbindung, keine Dateien geschrieben".into();
             for (id, name, date, status) in [
                 (
                     "demo-1",
                     "Finanzreport September 2026",
                     "2026-09-30",
-                    "Gespeichert ✓",
+                    "Ausstehend",
                 ),
                 (
                     "demo-2",
@@ -90,7 +89,7 @@ impl App {
                     "demo-3",
                     "Jahressteuerbescheinigung",
                     "2026-03-12",
-                    "Gespeichert ✓",
+                    "Ausstehend",
                 ),
             ] {
                 app.rows.push(DocumentRow {
@@ -104,7 +103,16 @@ impl App {
                     status,
                 });
             }
-            app.table.select(Some(0));
+            let rows = std::mem::take(&mut app.rows);
+            app.update(Update::Overview {
+                rows,
+                inventory: Inventory {
+                    online: 3,
+                    existing: 1,
+                    pending: 2,
+                    skipped: 0,
+                },
+            });
         }
         app
     }
@@ -143,7 +151,7 @@ impl App {
         }
         let compact = area.height < 27;
         let layout = Layout::vertical([
-            Constraint::Length(if compact { 2 } else { 3 }),
+            Constraint::Length(2),
             Constraint::Min(11),
             Constraint::Length(if compact { 4 } else { 5 }),
             Constraint::Length(if compact { 1 } else { 2 }),
@@ -151,23 +159,18 @@ impl App {
         .margin(1)
         .split(area);
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        "comdirect",
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("  /  POSTBOX ARCHIV"),
-                ]),
-                Line::styled(
-                    "PDFs unverändert archivieren · Dokumentdatum bewahren · Vorhandenes prüfen",
-                    Style::default().fg(MUTED),
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "comdirect",
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                 ),
-            ]),
+                Span::raw("  /  POSTBOX ARCHIV"),
+            ])),
             layout[0],
         );
         match self.screen {
             Screen::Login | Screen::Unlock => self.draw_form(frame, layout[1]),
+            Screen::Overview { inventory } => self.draw_overview(frame, layout[1], inventory),
             Screen::Challenge { sms } => {
                 let text = if sms {
                     "Die Bank hat eine mobileTAN gesendet.\n\nSechsstellige TAN eingeben und mit Enter einmalig senden.\n\n"
@@ -210,11 +213,15 @@ impl App {
             layout[2],
         );
         let keys = match self.screen {
-            Screen::Login => "Tab: Feld wechseln  ·  F5: Anmelden & archivieren  ·  Esc: Beenden",
+            Screen::Login => "Tab: Feld wechseln · F5: Anmelden & prüfen · Esc: Beenden",
             Screen::Unlock => {
                 "Tab: Feld wechseln  ·  F5: Lokale Sicherung aufheben  ·  Esc: Beenden"
             }
             Screen::Challenge { .. } => "Enter: Einmalig bestätigen  ·  Esc: Abbrechen",
+            Screen::Overview { inventory } if inventory.pending == 0 => {
+                "F5: Abschließen · ↑/↓: Dokument wählen · Esc / Q: Beenden"
+            }
+            Screen::Overview { .. } => "F5: Downloads starten · ↑/↓: Auswahl · Esc / Q: Beenden",
             Screen::Busy => "↑/↓: Dokument wählen  ·  Esc / Q: Sicher abbrechen",
             Screen::Finished => "↑/↓: Dokument wählen  ·  Esc / Q: Beenden",
         };
@@ -244,9 +251,9 @@ impl App {
         let intro = if unlock {
             "Nach erfolgreichem Weblogin mit TAN entsperren.\nZugangsnummer + WEBLOGIN BESTÄTIGT, dann F5.\nNur lokale Sicherung; keine Bankanfrage."
         } else if compact {
-            "Mit F5 einmalig anmelden und archivieren.\nDownloads markieren Dokumente als gelesen."
+            "Mit F5 anmelden und den Bestand prüfen.\nDownloads erst nach weiterer Bestätigung."
         } else {
-            "API-Zugangsdaten und Bankzugang eingeben. Erst F5 verbindet mit der Bank.\nDer Download markiert Dokumente in der Postbox als gelesen."
+            "Mit F5 anmelden und den lokalen Bestand mit der Postbox vergleichen.\nDie Übersicht wird vor dem Download zur Bestätigung angezeigt."
         };
         frame.render_widget(
             Paragraph::new(intro)
@@ -299,6 +306,57 @@ impl App {
         );
     }
 
+    fn draw_overview(&mut self, frame: &mut Frame, area: Rect, inventory: Inventory) {
+        let layout = Layout::vertical([Constraint::Length(7), Constraint::Min(4)]).split(area);
+        let title = if self.demo {
+            " Übersicht · OFFLINE-DEMO "
+        } else {
+            " Übersicht vor dem Download "
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(format!(
+                    "Online verfügbar:             {} Dokumente",
+                    inventory.online
+                )),
+                Line::from(format!(
+                    "Davon offline vorhanden:      {} PDFs",
+                    inventory.existing
+                )),
+                Line::styled(
+                    format!("Herunterzuladen:               {} PDFs", inventory.pending),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Line::from(format!(
+                    "Andere Formate / übersprungen: {}",
+                    inventory.skipped
+                )),
+            ])
+            .block(Block::bordered().title(title)),
+            layout[0],
+        );
+        self.draw_table(frame, layout[1]);
+    }
+
+    fn approve_downloads(&mut self, key: KeyEvent) -> bool {
+        if key.code != KeyCode::F(5) || !matches!(self.screen, Screen::Overview { .. }) {
+            return false;
+        }
+        if self.demo {
+            for row in &mut self.rows {
+                if row.status == "Ausstehend" {
+                    row.status = "Gespeichert ✓";
+                }
+            }
+            self.screen = Screen::Finished;
+            self.status = "Offline-Demo · 2 neu gespeichert, 1 vorhanden und geprüft · keine Bankverbindung, keine Dateien geschrieben".into();
+        } else {
+            self.screen = Screen::Busy;
+            self.status = "Downloads bestätigt. Fehlende PDFs werden archiviert …".into();
+        }
+        true
+    }
+
     fn draw_documents(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).split(area);
         let done = self
@@ -323,6 +381,10 @@ impl App {
                 .label(format!("{done} / {} Dokumente", self.rows.len())),
             layout[0],
         );
+        self.draw_table(frame, layout[1]);
+    }
+
+    fn draw_table(&mut self, frame: &mut Frame, area: Rect) {
         let rows = self.rows.iter().map(|row| {
             Row::new(vec![
                 Cell::from(row.document.date_creation.clone()),
@@ -348,7 +410,7 @@ impl App {
         .block(Block::bordered().title(" Postbox "))
         .row_highlight_style(Style::default().bg(Color::Rgb(38, 47, 58)))
         .highlight_symbol("› ");
-        frame.render_stateful_widget(table, layout[1], &mut self.table);
+        frame.render_stateful_widget(table, area, &mut self.table);
     }
 
     fn update(&mut self, update: Update) {
@@ -359,8 +421,16 @@ impl App {
                 self.status =
                     "Genau eine TAN-Challenge angefordert. Bitte sorgfältig freigeben.".into();
             }
-            Update::Documents(rows) => {
-                self.screen = Screen::Busy;
+            Update::Overview { rows, inventory } => {
+                self.screen = Screen::Overview { inventory };
+                self.status = if inventory.pending == 0 {
+                    "Keine Downloads nötig. F5 schließt ab; Esc beendet die Sitzung.".into()
+                } else {
+                    format!(
+                        "F5 startet {} Downloads. Die abgerufenen Dokumente werden bei comdirect als gelesen markiert.",
+                        inventory.pending
+                    )
+                };
                 self.rows = rows;
                 if !self.rows.is_empty() {
                     self.table.select(Some(0));
@@ -473,8 +543,10 @@ fn event_loop(
         }
         let quit = key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-            || (matches!(app.screen, Screen::Busy | Screen::Finished)
-                && matches!(key.code, KeyCode::Char('q' | 'Q')));
+            || (matches!(
+                app.screen,
+                Screen::Busy | Screen::Finished | Screen::Overview { .. }
+            ) && matches!(key.code, KeyCode::Char('q' | 'Q')));
         if quit {
             if let Some(active) = &worker {
                 active.cancelled.store(true, Ordering::Relaxed);
@@ -563,7 +635,7 @@ fn event_loop(
                     }
                     if let Some(active) = &worker {
                         let tan = Zeroizing::new(std::mem::take(&mut *app.tan));
-                        let _ = active.confirmations.send(tan);
+                        let _ = active.commands.send(Command::Tan(tan));
                         app.screen = Screen::Busy;
                         app.status = "Einmalige TAN-Freigabe prüfen …".into();
                     }
@@ -572,6 +644,15 @@ fn event_loop(
                 }
             }
             _ => {
+                if app.approve_downloads(key) {
+                    if let Some(active) = &worker {
+                        active
+                            .commands
+                            .send(Command::StartDownloads)
+                            .context("Downloadbestätigung konnte nicht übermittelt werden")?;
+                    }
+                    continue;
+                }
                 if !app.rows.is_empty() {
                     let selected = app.table.selected().unwrap_or(0);
                     match key.code {
@@ -591,6 +672,45 @@ fn event_loop(
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn overview_shows_inventory_and_requires_f5_instead_of_enter() {
+        for (width, height) in [(64, 22), (100, 30)] {
+            let mut app = App::new("postbox".into(), TanMethod::Push, false, true);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            for label in [
+                "Online verfügbar:",
+                "Davon offline vorhanden:",
+                "Herunterzuladen:",
+                "F5: Downloads starten",
+            ] {
+                assert!(text.contains(label));
+            }
+            assert!(!app.approve_downloads(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+            assert!(matches!(
+                app.screen,
+                Screen::Overview {
+                    inventory: Inventory {
+                        online: 3,
+                        existing: 1,
+                        pending: 2,
+                        skipped: 0
+                    }
+                }
+            ));
+            assert!(app.approve_downloads(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE)));
+            assert!(matches!(app.screen, Screen::Finished));
+            assert!(!app.approve_downloads(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE)));
+        }
+    }
 
     #[test]
     fn saved_credentials_prefill_the_form_but_pin_is_always_empty() {

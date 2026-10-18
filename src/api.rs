@@ -352,6 +352,10 @@ impl Api {
         ])
     }
 
+    pub fn access_token_deadline(&self) -> Instant {
+        self.expires_at
+    }
+
     pub fn documents(
         &mut self,
         mut checkpoint: impl FnMut() -> Result<()>,
@@ -884,5 +888,94 @@ mod tests {
         assert!(api.documents(|| Ok(())).is_err());
         server.handle.join().unwrap();
         assert_eq!(server.requests.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn overview_blocks_pdf_requests_until_approval_and_allows_cancelling() {
+        use crate::sync::{Command, Inventory, Update, review_and_download};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+
+        for approve in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut archive = crate::archive::Archive::open(dir.path()).unwrap();
+            let existing: Document = serde_json::from_value(doc("existing")).unwrap();
+            archive
+                .store(&existing, b"%PDF-1.4\nexisting\n%%EOF\n")
+                .unwrap();
+            let mut html = doc("html");
+            html["mimeType"] = json!("text/html");
+            let mut steps = vec![json_step(
+                "GET",
+                "/api/messages/clients/user/v2/documents?paging-first=0&paging-count=100",
+                json!({"paging":{"index":0,"matches":3},"values":[doc("existing"),doc("missing"),html]}),
+            )];
+            if approve {
+                steps.push(Step {
+                    method: "GET",
+                    path: "/api/messages/v2/documents/missing",
+                    status: 200,
+                    headers: vec![("Content-Type", "application/pdf")],
+                    body: "%PDF-1.4\nnew\n%%EOF\n".into(),
+                });
+            }
+            let server = serve(steps);
+            let mut api = Api::build(credentials(), &server.origin, false).unwrap();
+            api.token = Some(serde_json::from_value(token()).unwrap());
+            api.expires_at = Instant::now() + Duration::from_secs(599);
+            let (sender, updates) = mpsc::channel();
+            let (commands, receiver) = mpsc::channel();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let flag = cancelled.clone();
+            let worker = thread::spawn(move || {
+                review_and_download(&mut api, &mut archive, &sender, &receiver, &flag)
+            });
+            loop {
+                if let Update::Overview { rows, inventory } =
+                    updates.recv_timeout(Duration::from_secs(10)).unwrap()
+                {
+                    assert_eq!(
+                        inventory,
+                        Inventory {
+                            online: 3,
+                            existing: 1,
+                            pending: 1,
+                            skipped: 1
+                        }
+                    );
+                    assert_eq!(
+                        rows.iter().filter(|row| row.status == "Ausstehend").count(),
+                        1
+                    );
+                    break;
+                }
+            }
+            assert!(matches!(
+                updates.recv_timeout(Duration::from_millis(500)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            assert_eq!(server.requests.lock().unwrap().len(), 1);
+            if approve {
+                commands.send(Command::StartDownloads).unwrap();
+            } else {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+            let summary = worker.join().unwrap().unwrap();
+            server.handle.join().unwrap();
+            assert_eq!(
+                server.requests.lock().unwrap().len(),
+                if approve { 2 } else { 1 }
+            );
+            assert!(summary.contains(if approve {
+                "1 neu gespeichert"
+            } else {
+                "ohne Download"
+            }));
+            let missing: Document = serde_json::from_value(doc("missing")).unwrap();
+            let mut archive = crate::archive::Archive::open(dir.path()).unwrap();
+            assert_eq!(archive.exists_verified(&missing).unwrap(), approve);
+        }
     }
 }
