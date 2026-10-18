@@ -574,7 +574,10 @@ mod tests {
         );
         assert!(!missing.exists());
         missing_doc.date_creation = "2026-10-17".into();
-        assert_eq!(archive.store(&missing_doc, PDF).unwrap(), missing);
+        assert_eq!(
+            archive.store(&missing_doc, PDF).unwrap(),
+            missing.canonicalize().unwrap()
+        );
         assert_eq!(
             FileTime::from_last_modification_time(&fs::metadata(&missing).unwrap()).unix_seconds(),
             doc().timestamp().unwrap().timestamp()
