@@ -70,7 +70,7 @@ Der Konfigurationspfad hat keinen Einfluss auf die lokale Anmeldesicherung. Ein 
 
 Fehler zeigen den HTTP-Status und den betroffenen API-Pfad an. Beim Schließen einer fehlgeschlagenen Archivierung bleibt die Meldung zusätzlich im normalen Terminal sichtbar; das Programm endet mit Fehlercode `1`. Zugangsdaten, Tokens, TANs und Antwortinhalte werden dabei nicht ausgegeben.
 
-HTTP `406` beim Dokumentabruf bedeutet laut API-Spezifikation, dass das angeforderte Antwortformat nicht akzeptiert wird. Version **0.2.0** korrigiert einen Fehler, bei dem sowohl JSON als auch PDF im `Accept`-Header standen: PDF-Downloads senden jetzt ausschließlich `Accept: application/pdf`, die übrigen Anfragen ausschließlich `application/json`. Ein Formatfehler wird nicht durch zusätzliche Anmelde- oder TAN-Versuche behandelt. Vorhandene vollständige Archivdateien werden beim nächsten Start weiterhin erkannt.
+HTTP `406` beim Dokumentabruf bedeutet, dass das angeforderte Antwortformat nicht akzeptiert wird. Version **0.2.0** korrigiert einen Fehler, bei dem sowohl JSON als auch PDF im `Accept`-Header standen: PDF-Downloads senden jetzt ausschließlich `Accept: application/pdf`, die übrigen Anfragen ausschließlich `application/json`. Ein Formatfehler wird nicht durch zusätzliche Anmelde- oder TAN-Versuche behandelt. Vorhandene vollständige Archivdateien werden beim nächsten Start weiterhin erkannt.
 
 ## Archiv und Originaldatum
 
@@ -93,7 +93,7 @@ Die Kontokennung besteht aus den ersten 16 Hexzeichen eines SHA-256-Hashes der Z
 
 Die von comdirect gelieferten PDF-Bytes bleiben unverändert. Für einen späteren Import kannst du die PDF-Dateien direkt verwenden. Die zugehörigen JSON-Dateien enthalten die ursprünglichen API-Metadaten einschließlich `dateCreation`, Prüfsumme, Größe und Archivierungszeitpunkt.
 
-Die Spezifikation liefert `dateCreation` als **Kalenderdatum ohne Uhrzeit oder Zeitzone**. Dieses Datum wird im Dateinamen und als Dateiänderungsdatum mit **00:00 UTC** gespeichert. Das ist eine festgelegte Abbildung; die ursprüngliche Erstellungsuhrzeit lässt sich aus der API nicht rekonstruieren. Manche Programme zeigen den Zeitpunkt in lokaler Zeit an. Ein portables Setzen des Dateisystem-Erstellungsdatums wird nicht zugesagt; bei Importen das Änderungsdatum, den Dateinamen oder die Metadaten verwenden. Interne PDF-Metadaten werden nicht verändert.
+Die API liefert `dateCreation` als **Kalenderdatum ohne Uhrzeit oder Zeitzone**. Dieses Datum wird im Dateinamen und als Dateiänderungsdatum mit **00:00 UTC** gespeichert. Das ist eine festgelegte Abbildung; die ursprüngliche Erstellungsuhrzeit lässt sich aus der API nicht rekonstruieren. Manche Programme zeigen den Zeitpunkt in lokaler Zeit an. Ein portables Setzen des Dateisystem-Erstellungsdatums wird nicht zugesagt; bei Importen das Änderungsdatum, den Dateinamen oder die Metadaten verwenden. Interne PDF-Metadaten werden nicht verändert.
 
 Vorhandene PDFs werden auf Dateisignatur, Endemarkierung, Größe und SHA-256 geprüft. Eine fehlende PDF wird erneut heruntergeladen; eine abweichende vorhandene Datei führt zum Abbruch und wird nicht überschrieben. Eine vollständige PDF ohne Metadaten an ihrem erwarteten Pfad wird nach Prüfung wieder ins Archiv aufgenommen, etwa nach einem Abbruch zwischen PDF- und Metadatenspeicherung. Ohne frühere Prüfsumme lässt sich dabei nur die vorhandene Datei als Ausgangsstand erfassen, nicht ihre Übereinstimmung mit dem Bankoriginal beweisen.
 
@@ -101,7 +101,7 @@ Verschiebst du Dateien innerhalb des Kontoarchivs, immer **PDF und zugehörige `
 
 ## Schutz vor Kontosperren
 
-Die mitgelieferte API-Spezifikation nennt eine Sperre nach drei falschen TAN-Eingaben bzw. fünf angeforderten TAN-Challenges ohne erfolgreiche TAN-Entwertung. Deshalb gelten folgende Regeln:
+Zum Schutz vor Kontosperren begrenzt die Anwendung Anmelde- und TAN-Versuche. Es gelten folgende Regeln:
 
 - Pro Programmstart höchstens ein Passwortversuch, eine TAN-Anforderung und eine TAN-Aktivierung. HTTP-Wiederholungen und Weiterleitungen sind deaktiviert.
 - Bei Netzwerk-, API-, PIN-, TAN- oder Refresh-Fehlern bricht die App ab. Sie versucht keine automatische Neuanmeldung. Dokumentanfragen laufen nacheinander mit mindestens 350 ms Abstand.
@@ -132,7 +132,7 @@ cargo test --locked
 
 Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
 
-Die lokale Datei `comdirect_REST_API_Dokumentation.pdf` ist die fachliche Grundlage (Kapitel 1–3 und 9) und wird über `.gitignore` ausgeschlossen. Sie ist kein Bestandteil des Repositories. Die Seitenparameter `paging-first` und `paging-count` folgen der comdirect-Paging-Konvention; die App prüft den zurückgegebenen Index und bricht bei widersprüchlichen oder wiederholten Seiten ab. Die bereitgestellte PDF führt diese Query-Parameter für Dokumente nicht ausdrücklich auf; dieses Verhalten muss bei einem echten Abruf bestätigt werden. Die allgemeine Paging-Konvention erläutert auch ein [Beitrag der comdirect-Fachabteilung](https://community.comdirect.de/t5/website-apps/rest-api-filter-parameter/td-p/108710/page/3).
+Die Seitenparameter `paging-first` und `paging-count` folgen der comdirect-Paging-Konvention; die App prüft den zurückgegebenen Index und bricht bei widersprüchlichen oder wiederholten Seiten ab. Die allgemeine Paging-Konvention erläutert auch ein [Beitrag der comdirect-Fachabteilung](https://community.comdirect.de/t5/website-apps/rest-api-filter-parameter/td-p/108710/page/3).
 
 Die Deaktivierung automatischer HTTP-Wiederholungen verwendet die ausdrücklich dafür vorgesehene [reqwest-Retry-Policy](https://docs.rs/reqwest/0.12.28/reqwest/retry/index.html).
 

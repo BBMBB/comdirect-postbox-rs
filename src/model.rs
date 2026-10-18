@@ -15,7 +15,7 @@ pub struct Document {
 
 impl Document {
     pub fn date(&self) -> Result<NaiveDate> {
-        // The specification defines DateString as a date without time or timezone.
+        // The API defines DateString as a date without time or timezone.
         ensure!(
             self.date_creation.len() == 10,
             "Dokumentdatum muss das Format JJJJ-MM-TT haben"
