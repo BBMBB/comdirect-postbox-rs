@@ -65,11 +65,17 @@ pub struct Worker {
     handle: Option<JoinHandle<()>>,
 }
 
+struct ArchivePaths {
+    output: PathBuf,
+    index: PathBuf,
+}
+
 impl Worker {
     pub fn start(
         safety: Arc<Safety>,
         credentials: Credentials,
         output: PathBuf,
+        index_path: PathBuf,
         method: TanMethod,
     ) -> Self {
         let (sender, updates) = mpsc::channel();
@@ -80,7 +86,10 @@ impl Worker {
             let result = run(
                 safety,
                 credentials,
-                output,
+                ArchivePaths {
+                    output,
+                    index: index_path,
+                },
                 method,
                 &sender,
                 receiver,
@@ -165,7 +174,7 @@ fn account_directory(output: &Path, username: &str) -> Result<PathBuf> {
 fn run(
     safety: Arc<Safety>,
     credentials: Credentials,
-    output: PathBuf,
+    paths: ArchivePaths,
     method: TanMethod,
     updates: &Sender<Update>,
     commands: Receiver<Command>,
@@ -174,8 +183,8 @@ fn run(
     credentials.validate()?;
     let username = Zeroizing::new(credentials.username.clone());
     let _ = updates.send(Update::Status("Lokales Archiv prüfen …".into()));
-    let root = account_directory(&output, &username)?;
-    let mut archive = Archive::open(&root)?;
+    let root = account_directory(&paths.output, &username)?;
+    let mut archive = Archive::open(&root, &paths.index)?;
     let mut api = Api::new(credentials)?;
     checkpoint(cancelled)?;
     safety.begin(&username)?;
@@ -376,7 +385,11 @@ mod tests {
     #[test]
     fn plan_counts_only_verified_online_pdfs_and_stops_on_corruption() {
         let dir = tempfile::tempdir().unwrap();
-        let mut archive = Archive::open(dir.path()).unwrap();
+        let mut archive = Archive::open(
+            &dir.path().join("postbox"),
+            &dir.path().join("archive-index.json"),
+        )
+        .unwrap();
         let existing = document("existing", "application/pdf");
         let path = archive.store(&existing, PDF).unwrap();
         archive
@@ -448,16 +461,30 @@ mod tests {
     fn legacy_archive_is_renamed_without_changing_pdf_dates_or_ids() {
         let dir = tempfile::tempdir().unwrap();
         let legacy = dir.path().join(&account_key("12345678")[..16]);
-        let mut archive = Archive::open(&legacy).unwrap();
+        use sha2::{Digest, Sha256};
         let doc = document("existing", "application/pdf");
-        let original = archive.store(&doc, PDF).unwrap();
-        let modified = fs::metadata(original).unwrap().modified().unwrap();
-        drop(archive);
+        fs::create_dir_all(legacy.join("2024")).unwrap();
+        let original = legacy.join("2024/manuell.pdf");
+        fs::write(&original, PDF).unwrap();
+        filetime::set_file_mtime(
+            &original,
+            filetime::FileTime::from_unix_time(doc.timestamp().unwrap().timestamp(), 0),
+        )
+        .unwrap();
+        let sidecar = legacy.join("2024/manuell.pdf.postbox.json");
+        fs::write(&sidecar, serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "document": doc, "sha256": format!("{:x}", Sha256::digest(PDF)),
+            "size": PDF.len(), "archived_at": "2025-01-01T12:00:00Z"
+        })).unwrap()).unwrap();
+        let modified = fs::metadata(&original).unwrap().modified().unwrap();
         let named = account_directory(dir.path(), "12345678").unwrap();
         assert_eq!(named, dir.path().join("12345678"));
         assert!(!legacy.exists());
-        let mut archive = Archive::open(&named).unwrap();
-        assert!(archive.exists_verified(&doc).unwrap());
+        let mut archive = Archive::open(&named, &dir.path().join("archive-index.json")).unwrap();
+        let mut changed = doc;
+        changed.name = "Changed title".into();
+        assert!(archive.exists_verified(&changed).unwrap());
+        assert!(!named.join("2024/manuell.pdf.postbox.json").exists());
         let pdf = walkdir::WalkDir::new(&named)
             .into_iter()
             .map(Result::unwrap)

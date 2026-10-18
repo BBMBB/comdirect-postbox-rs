@@ -118,6 +118,7 @@ impl App {
     }
 
     fn configure(&mut self, store: ConfigStore) -> Result<()> {
+        store.archive_index_path()?;
         let mut saved = store.load()?;
         if matches!(self.screen, Screen::Unlock) {
             *self.inputs[0] = std::mem::take(&mut saved.username);
@@ -604,6 +605,11 @@ fn event_loop(
                             continue;
                         }
                         let state = safety.as_ref().context("Lokaler Zustand fehlt")?.clone();
+                        let index_path = app
+                            .config
+                            .as_ref()
+                            .context("Konfiguration fehlt")?
+                            .archive_index_path()?;
                         if let Some(store) = &app.config
                             && let Err(error) = store.save(&credentials)
                         {
@@ -618,6 +624,7 @@ fn event_loop(
                             state,
                             credentials,
                             app.output.clone(),
+                            index_path,
                             app.method,
                         ));
                         app.failed = false;

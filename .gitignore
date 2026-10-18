@@ -9,3 +9,4 @@
 auth-*.pending
 *.lockfile
 config.json
+archive-index.json

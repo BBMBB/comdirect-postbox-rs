@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::{api::Credentials, archive::private_dir};
+use crate::{
+    api::Credentials,
+    archive::{INDEX_FILE_NAME, private_dir},
+};
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
@@ -40,6 +43,16 @@ pub struct ConfigStore {
 impl ConfigStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    pub fn archive_index_path(&self) -> Result<PathBuf> {
+        ensure!(
+            self.path
+                .file_name()
+                .is_some_and(|name| !name.to_string_lossy().eq_ignore_ascii_case(INDEX_FILE_NAME)),
+            "Konfiguration und Archivindex müssen verschiedene Dateien sein"
+        );
+        Ok(self.path.with_file_name(INDEX_FILE_NAME))
     }
 
     pub fn load(&self) -> Result<SavedCredentials> {
@@ -163,6 +176,32 @@ mod tests {
         let saved = ConfigStore::new(path).load().unwrap();
         assert_eq!(saved.username, "12345678");
         assert!(saved.client_secret.is_empty());
+    }
+
+    #[test]
+    fn index_stays_beside_selected_config_and_cannot_replace_it() {
+        assert_eq!(
+            ConfigStore::new(PathBuf::from("settings/custom.json"))
+                .archive_index_path()
+                .unwrap(),
+            PathBuf::from("settings/archive-index.json")
+        );
+        assert_eq!(
+            ConfigStore::new(PathBuf::from("config.json"))
+                .archive_index_path()
+                .unwrap(),
+            PathBuf::from("archive-index.json")
+        );
+        assert!(
+            ConfigStore::new(PathBuf::from("archive-index.json"))
+                .archive_index_path()
+                .is_err()
+        );
+        assert!(
+            ConfigStore::new(PathBuf::from("ARCHIVE-INDEX.JSON"))
+                .archive_index_path()
+                .is_err()
+        );
     }
 
     #[test]

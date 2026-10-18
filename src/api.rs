@@ -699,7 +699,11 @@ mod tests {
             )
             .unwrap();
             let documents = api.documents(|| Ok(())).unwrap();
-            let mut archive = crate::archive::Archive::open(dir.path()).unwrap();
+            let mut archive = crate::archive::Archive::open(
+                &dir.path().join("postbox"),
+                &dir.path().join("archive-index.json"),
+            )
+            .unwrap();
             let mut downloaded = 0;
             for doc in documents {
                 if !archive.exists_verified(&doc).unwrap() {
@@ -900,7 +904,11 @@ mod tests {
 
         for approve in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let mut archive = crate::archive::Archive::open(dir.path()).unwrap();
+            let mut archive = crate::archive::Archive::open(
+                &dir.path().join("postbox"),
+                &dir.path().join("archive-index.json"),
+            )
+            .unwrap();
             let existing: Document = serde_json::from_value(doc("existing")).unwrap();
             archive
                 .store(&existing, b"%PDF-1.4\nexisting\n%%EOF\n")
@@ -974,7 +982,11 @@ mod tests {
                 "ohne Download"
             }));
             let missing: Document = serde_json::from_value(doc("missing")).unwrap();
-            let mut archive = crate::archive::Archive::open(dir.path()).unwrap();
+            let mut archive = crate::archive::Archive::open(
+                &dir.path().join("postbox"),
+                &dir.path().join("archive-index.json"),
+            )
+            .unwrap();
             assert_eq!(archive.exists_verified(&missing).unwrap(), approve);
         }
     }
