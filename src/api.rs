@@ -488,8 +488,13 @@ mod tests {
                         Err(error) => panic!("Mock accept failed: {error}"),
                     }
                 };
+                // Accepted sockets inherit nonblocking mode on Windows, unlike Linux.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut bytes = Vec::new();
                 let mut buffer = [0; 4096];
