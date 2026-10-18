@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -175,7 +175,12 @@ fn run(
                     index + 1,
                     documents.len()
                 )));
-                let bytes = api.download(doc)?;
+                let bytes = api.download(doc).with_context(|| {
+                    format!(
+                        "PDF-Abruf für Dokument {} vom {} fehlgeschlagen",
+                        doc.document_id, doc.date_creation
+                    )
+                })?;
                 archive.store(doc, &bytes)?;
                 downloaded += 1;
                 "Gespeichert ✓"

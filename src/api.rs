@@ -153,36 +153,59 @@ impl Api {
     fn request(&mut self, method: Method, path: &str) -> RequestBuilder {
         self.request_number += 1;
         self.client.request(method, format!("{}{path}", self.origin))
-            .header(ACCEPT, "application/json")
             .header("x-http-request-info", json!({"clientRequestId": {
                 "sessionId": self.request_session, "requestId": format!("{:09}", self.request_number)
             }}).to_string())
     }
 
     fn authorized(&mut self, method: Method, path: &str) -> Result<RequestBuilder> {
-        let request = self.request(method, path);
+        self.authorized_with_accept(method, path, "application/json")
+    }
+
+    fn authorized_with_accept(
+        &mut self,
+        method: Method,
+        path: &str,
+        accept: &'static str,
+    ) -> Result<RequestBuilder> {
+        let request = self.request(method, path).header(ACCEPT, accept);
         let token = self.token.as_ref().context("Keine aktive Sitzung")?;
         Ok(request.bearer_auth(&token.access_token))
     }
 
     fn send(&mut self, request: RequestBuilder) -> Result<Response> {
+        let request = request.build().map_err(|_| {
+            anyhow::anyhow!("Bankanfrage konnte nicht vorbereitet werden; keine Anfrage gesendet")
+        })?;
+        // Only method and path may be displayed: never log headers, query strings,
+        // credentials, token responses or request bodies.
+        let method = request.method().clone();
+        let path = request.url().path().to_owned();
         if let Some(last) = self.last_request {
             thread::sleep(Duration::from_millis(350).saturating_sub(last.elapsed()));
         }
         self.last_request = Some(Instant::now());
-        let response = request.send().map_err(|_| anyhow::anyhow!(
-            "Netzwerkfehler oder Zeitüberschreitung. Anfrage wird nicht wiederholt. Bei Anmeldefehlern zuerst das Webbanking prüfen."))?;
+        let response = self.client.execute(request).map_err(|_| anyhow::anyhow!(
+            "Netzwerkfehler oder Zeitüberschreitung bei {method} {path}. Anfrage wird nicht wiederholt. Bei Anmeldefehlern zuerst das Webbanking prüfen."))?;
         let status = response.status();
+        if status == reqwest::StatusCode::NOT_ACCEPTABLE {
+            bail!(
+                "Bankanfrage abgebrochen (HTTP 406, {method} {path}): Die Bank akzeptiert das angeforderte Antwortformat nicht. Keine automatische Wiederholung oder neue TAN-Anforderung."
+            );
+        }
         ensure!(
             status.is_success(),
-            "Bankanfrage abgebrochen (HTTP {}). Keine automatische Wiederholung. Bei 401/403/422 bitte Zugang und TAN im Webbanking prüfen; bei 429 später erneut starten.",
+            "Bankanfrage abgebrochen (HTTP {}, {method} {path}). Keine automatische Wiederholung. Bei 401/403/422 bitte Zugang und TAN im Webbanking prüfen; bei 429 später erneut starten.",
             status.as_u16()
         );
         Ok(response)
     }
 
     fn exchange(&mut self, fields: &[(&str, &str)]) -> Result<()> {
-        let request = self.request(Method::POST, "/oauth/token").form(fields);
+        let request = self
+            .request(Method::POST, "/oauth/token")
+            .header(ACCEPT, "application/json")
+            .form(fields);
         let response = self.send(request)?;
         let token: Token = read_json(response)?;
         let seconds = token.expires_in.seconds()?;
@@ -379,12 +402,11 @@ impl Api {
         doc.validate()?;
         ensure!(doc.is_pdf(), "Nur PDF-Dokumente werden heruntergeladen");
         self.refresh_if_needed()?;
-        let request = self
-            .authorized(
-                Method::GET,
-                &format!("/api/messages/v2/documents/{}", doc.document_id),
-            )?
-            .header(ACCEPT, "application/pdf");
+        let request = self.authorized_with_accept(
+            Method::GET,
+            &format!("/api/messages/v2/documents/{}", doc.document_id),
+            "application/pdf",
+        )?;
         let response = self.send(request)?;
         let content_type = response
             .headers()
@@ -473,7 +495,7 @@ mod tests {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
         let handle = thread::spawn(move || {
-            for step in steps {
+            for mut step in steps {
                 let deadline = Instant::now() + Duration::from_secs(15);
                 let mut stream = loop {
                     match listener.accept() {
@@ -517,6 +539,16 @@ mod tests {
                 let request = String::from_utf8(bytes).unwrap();
                 let first = request.lines().next().unwrap();
                 assert_eq!(first, format!("{} {} HTTP/1.1", step.method, step.path));
+                // Emulate a strict PDF endpoint: JSON or multiple Accept values
+                // must produce the same 406 that a bank can return.
+                if step.path.starts_with("/api/messages/v2/documents/") && step.status == 200 {
+                    let accepts = accept_values(&request);
+                    if accepts != ["application/pdf"] {
+                        step.status = 406;
+                        step.headers = vec![("Content-Type", "application/json")];
+                        step.body = r#"{"code":"not.acceptable"}"#.into();
+                    }
+                }
                 captured.lock().unwrap().push(request);
                 write!(
                     stream,
@@ -545,6 +577,18 @@ mod tests {
             username: "12345678".into(),
             pin: "123456".into(),
         }
+    }
+
+    fn accept_values(request: &str) -> Vec<&str> {
+        request
+            .split("\r\n\r\n")
+            .next()
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .flat_map(|(_, values)| values.split(',').map(str::trim))
+            .collect()
     }
 
     fn token() -> serde_json::Value {
@@ -673,6 +717,12 @@ mod tests {
             2
         );
         for request in requests.iter() {
+            let expected = if request.starts_with("GET /api/messages/v2/documents/") {
+                "application/pdf"
+            } else {
+                "application/json"
+            };
+            assert_eq!(accept_values(request), [expected]);
             let header = request
                 .lines()
                 .find_map(|line| line.strip_prefix("x-http-request-info: "))
@@ -694,12 +744,42 @@ mod tests {
                 .iter()
                 .any(|r| r.contains("grant_type=cd_secondary"))
         );
-        assert!(
-            requests
-                .iter()
-                .filter(|r| r.starts_with("GET /api/messages/v2/"))
-                .all(|r| r.contains("accept: application/pdf"))
+    }
+
+    #[test]
+    fn pdf_accept_is_exclusive_and_406_is_reported_without_retry() {
+        let pdf_step = || Step {
+            method: "GET",
+            path: "/api/messages/v2/documents/id-1",
+            status: 200,
+            headers: vec![("Content-Type", "application/pdf")],
+            body: "%PDF-1.4\noriginal\n%%EOF\n".into(),
+        };
+        let server = serve(vec![pdf_step(), pdf_step()]);
+        let mut api = Api::build(credentials(), &server.origin, false).unwrap();
+        api.token = Some(serde_json::from_value(token()).unwrap());
+        api.expires_at = Instant::now() + Duration::from_secs(599);
+        // Reproduce the old request with conflicting Accept values.
+        let request = api
+            .authorized(Method::GET, "/api/messages/v2/documents/id-1")
+            .unwrap()
+            .header(ACCEPT, "application/pdf");
+        let error = api.send(request).err().unwrap().to_string();
+        assert!(error.contains("HTTP 406"));
+        assert!(error.contains("GET /api/messages/v2/documents/id-1"));
+        for secret in ["test-secret", "test-access", "12345678"] {
+            assert!(!error.contains(secret));
+        }
+        let document = serde_json::from_value(doc("id-1")).unwrap();
+        assert!(api.download(&document).unwrap().starts_with(b"%PDF-"));
+        server.handle.join().unwrap();
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            accept_values(&requests[0]),
+            ["application/json", "application/pdf"]
         );
+        assert_eq!(accept_values(&requests[1]), ["application/pdf"]);
     }
 
     #[test]
