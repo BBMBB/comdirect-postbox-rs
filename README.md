@@ -2,6 +2,8 @@
 
 > **Disclaimer:** Dieses Projekt ist mittels Vibe Coding mit KI-Unterstützung entstanden. Es kann Fehler enthalten; die Nutzung erfolgt auf eigene Verantwortung.
 
+Die Idee zu diesem Projekt stammt von [senshi-x/ComdirectPostboxDownloader](https://github.com/senshi-x/ComdirectPostboxDownloader).
+
 Eine deutsche Rust-TUI zum inkrementellen Archivieren der comdirect Postbox auf **Linux und Windows**. Die Anwendung lädt PDF-Dokumente unverändert herunter, sortiert sie nach Jahr und Dokumentart und prüft bereits archivierte Dokumente anhand ihrer Dokument-ID, Dateigröße und SHA-256-Prüfsumme.
 
 ## Starten
@@ -24,16 +26,20 @@ Windows (PowerShell):
 .\target\release\comdirect-postbox-rs.exe --ziel "$HOME\Documents\comdirect"
 ```
 
-Mit `cargo run --locked -- --demo` kannst du die Oberfläche ohne Bankverbindung, Zugangsdaten und Schreibzugriffe ansehen. `--help` zeigt die Optionen. Das Terminal sollte mindestens 64 × 22 Zeichen groß sein.
+Mit `cargo run --locked -- --demo` kannst du die Übersicht ohne Bankverbindung, Zugangsdaten und Schreibzugriffe ansehen. `F5` zeigt darin einen simulierten Abschluss. `--help` zeigt die Optionen. Das Terminal sollte mindestens 64 × 22 Zeichen groß sein.
 
 ## Anmeldung und Bedienung
 
 Du benötigst einen freigeschalteten comdirect-API-Zugang mit **Client-ID** und **Client-Secret**, deine achtstellige Zugangsnummer und deine PIN. API-Zugangsdaten sind separat vom Bankzugang. Alle vier Felder werden verdeckt eingegeben. Client-ID, Client-Secret und Zugangsnummer werden in einer lokalen Konfigurationsdatei gespeichert. **PIN, TAN und Tokens werden nicht gespeichert.**
 
 1. Felder mit `Tab` wechseln; `Umschalt+Tab` wechselt zurück. `Strg+U` leert das aktuelle Feld.
-2. Mit `F5` die drei Konfigurationswerte speichern und genau eine Anmeldung mit anschließender Archivierung starten. Bei weiteren Programmstarts sind diese Felder bereits ausgefüllt und der Fokus liegt direkt auf der PIN. Änderungen an den drei Werten werden beim nächsten `F5` übernommen.
+2. Mit `F5` die drei Konfigurationswerte speichern, genau eine Anmeldung starten und den Bestand prüfen. Bei weiteren Programmstarts sind diese Felder bereits ausgefüllt und der Fokus liegt direkt auf der PIN. Änderungen an den drei Werten werden beim nächsten `F5` übernommen.
 3. Standardmäßig die Anmeldung in der **photoTAN-App** freigeben und **erst nach der Freigabe** in der TUI `Enter` drücken. Es wird nicht automatisch auf Freigabe geprüft.
-4. Die TUI zeigt neue, vorhandene und nicht als PDF verfügbare Dokumente an. Mit `↑`/`↓` navigieren; `Esc` oder `Q` beendet den Vorgang kontrolliert. Laufende HTTP-Anfragen können bis zu 60 Sekunden und die anschließende Abmeldung nochmals bis zu 60 Sekunden dauern.
+4. Nach der Anmeldung folgt die **Bestandsübersicht**: online verfügbare Dokumente, davon bereits lokal vorhandene und geprüfte PDFs sowie noch herunterzuladende PDFs. Andere Formate werden separat als übersprungen gezählt. Lokal archivierte Dokumente, die online nicht mehr vorkommen, gehören nicht zur Zahl „davon offline vorhanden“. Bis hier werden nur die Dokumentenliste und lokale Dateien geprüft, keine PDFs bei der Bank abgerufen.
+5. Mit einem **weiteren `F5` in der Übersicht** die fehlenden PDFs herunterladen. `Enter` bestätigt keine Downloads. Mit `↑`/`↓` die Dokumente durchsehen; `Esc` oder `Q` beendet die Sitzung aus der Übersicht ohne PDF-Download. Gibt es nichts herunterzuladen, schließt `F5` den Vorgang ab.
+6. Während des Downloads zeigt die TUI den Fortschritt. `Esc` oder `Q` bricht kontrolliert ab. Laufende HTTP-Anfragen können bis zu 60 Sekunden und die anschließende Abmeldung nochmals bis zu 60 Sekunden dauern.
+
+Die Übersicht wartet bis kurz vor Ablauf des aktuellen Zugriffstokens auf die Bestätigung. Ohne Bestätigung werden weder PDFs abgerufen noch Tokens im Hintergrund erneuert. Läuft die Sitzung ab, beendet die App sie und meldet, dass eine neue Anmeldung erforderlich ist.
 
 Für ein bereits bei comdirect freigeschaltetes mobileTAN-Verfahren gibt es `--tan sms`. Die sechsstellige TAN wird einmalig gesendet. Ein automatischer Wechsel des Verfahrens oder die Anzeige einer photoTAN-Scan-Grafik ist nicht implementiert.
 
@@ -43,10 +49,9 @@ Für ein bereits bei comdirect freigeschaltetes mobileTAN-Verfahren gibt es `--t
 
 Die App legt `config.json` beim ersten Start mit `F5` an, bevor eine Bankanfrage gesendet wird. Das geschieht auch dann, wenn die anschließende Anmeldung oder der Download fehlschlägt. Beim nächsten Programmstart werden die Werte automatisch geladen. Ein Abbruch vor `F5` speichert keine Änderungen.
 
-| System | Standardpfad |
-| --- | --- |
-| Linux | `~/.config/comdirect-postbox-rs/config.json` (bzw. unter `XDG_CONFIG_HOME`) |
-| Windows | `%LOCALAPPDATA%\comdirect-postbox-rs\comdirect-postbox-rs\config\config.json` |
+Standardmäßig liegt die Konfiguration **im selben Ordner wie die ausführbare Programmdatei**: unter Linux neben `comdirect-postbox-rs`, unter Windows neben `comdirect-postbox-rs.exe`. Der aktuelle Arbeitsordner hat darauf keinen Einfluss. Bei `cargo run --release --locked` ist der Standardpfad `target/release/config.json`, bei einem Debug-Build `target/debug/config.json`.
+
+Eine bereits vorhandene Konfiguration aus einer älteren Version kannst du neben die Programmdatei kopieren oder weiter über `--config` auswählen. Das Programmverzeichnis muss zum Speichern beschreibbar sein.
 
 Einen anderen Pfad kannst du mit `--config` wählen:
 
@@ -80,7 +85,7 @@ Beispiel für die Ordnerstruktur:
 
 ```text
 comdirect/
-  <Kontokennung>/
+  12345678/
     2026/
       Kontoauszuege/
         2026-09-30_Finanzreport September_<Dokument-ID>.pdf
@@ -91,7 +96,9 @@ comdirect/
       Sonstiges/
 ```
 
-Die Kontokennung besteht aus den ersten 16 Hexzeichen eines SHA-256-Hashes der Zugangsnummer und verhindert eine Vermischung mehrerer Zugänge. Sie ist keine Verschlüsselung. Die Kategorien werden aus dem Dokumenttitel abgeleitet; unbekannte Titel landen in `Sonstiges`.
+Der Kontoordner heißt wie der **Anmeldename**, also die achtstellige Zugangsnummer aus dem Konfigurationsfeld `username`. Dadurch bleiben mehrere Zugänge getrennt. Die Kategorien werden aus dem Dokumenttitel abgeleitet; unbekannte Titel landen in `Sonstiges`.
+
+Vorhandene Archive mit der früheren Ordnerkennung werden beim Start automatisch auf den Anmeldenamen umbenannt. PDFs, Dokument-IDs und Datumsangaben bleiben dabei erhalten und vorhandene Dokumente werden weiter erkannt. Existieren bereits beide Kontoordner, bricht die App vor einer Bankanfrage ab, damit keine Dateien überschrieben werden; die Archive müssen dann zuerst zusammengeführt werden.
 
 Die von comdirect gelieferten PDF-Bytes bleiben unverändert. Für einen späteren Import kannst du die PDF-Dateien direkt verwenden. Die zugehörigen JSON-Dateien enthalten die ursprünglichen API-Metadaten einschließlich `dateCreation`, Prüfsumme, Größe und Archivierungszeitpunkt.
 
@@ -132,7 +139,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
+Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Zusätzlich wird geprüft, dass die Übersicht vor jeder Downloadbestätigung ohne PDF-Anfragen wartet, ein Abbruch keinen Download auslöst und die Umbenennung vorhandener Kontoarchive die Dateidaten erhält. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
 
 Die Seitenparameter `paging-first` und `paging-count` folgen der comdirect-Paging-Konvention; die App prüft den zurückgegebenen Index und bricht bei widersprüchlichen oder wiederholten Seiten ab. Die allgemeine Paging-Konvention erläutert auch ein [Beitrag der comdirect-Fachabteilung](https://community.comdirect.de/t5/website-apps/rest-api-filter-parameter/td-p/108710/page/3).
 

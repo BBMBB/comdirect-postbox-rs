@@ -36,7 +36,7 @@ struct Args {
         hide_default_value = true
     )]
     output: PathBuf,
-    /// Konfigurationsdatei (Standard: config.json im lokalen Konfigurationsverzeichnis)
+    /// Konfigurationsdatei (Standard: config.json neben der ausführbaren Datei)
     #[arg(long, value_name = "DATEI")]
     config: Option<PathBuf>,
     /// TAN-Verfahren: push (Standard, photoTAN-App) oder sms (mobileTAN, falls freigeschaltet)
@@ -85,10 +85,11 @@ fn run() -> Result<()> {
         let directories = ProjectDirs::from("de", "comdirect-postbox-rs", "comdirect-postbox-rs")
             .context("Lokales Anwendungsverzeichnis nicht verfügbar")?;
         let state = Arc::new(safety::Safety::open(directories.data_local_dir())?);
-        let config = config::ConfigStore::new(
-            args.config
-                .unwrap_or_else(|| directories.config_local_dir().join("config.json")),
-        );
+        let config_path = match args.config {
+            Some(path) => path,
+            None => config::default_path()?,
+        };
+        let config = config::ConfigStore::new(config_path);
         (Some(state), Some(config))
     };
     tui::run(args.output, args.tan, args.unlock, args.demo, state, config)

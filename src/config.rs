@@ -13,6 +13,15 @@ use crate::{api::Credentials, archive::private_dir};
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
+pub fn default_path() -> Result<PathBuf> {
+    let executable =
+        std::env::current_exe().context("Programmverzeichnis konnte nicht ermittelt werden")?;
+    Ok(executable
+        .parent()
+        .context("Programmverzeichnis fehlt")?
+        .join("config.json"))
+}
+
 #[derive(Default, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 pub struct SavedCredentials {
