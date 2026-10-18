@@ -1,0 +1,43 @@
+name: Rust-Prüfungen
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: comdirect-postbox-rs
+            artifact: comdirect-postbox-linux-x86_64
+          - os: windows-latest
+            binary: comdirect-postbox-rs.exe
+            artifact: comdirect-postbox-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatierung prüfen
+        run: cargo fmt --all --check
+      - name: Clippy prüfen
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests ohne Bankzugriff
+        run: cargo test --locked
+      - name: Programm bauen
+        run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/release/${{ matrix.binary }}
+          if-no-files-found: error
