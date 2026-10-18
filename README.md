@@ -1,5 +1,7 @@
 # comdirect-postbox-rs
 
+> **Disclaimer:** Dieses Projekt ist mittels Vibe Coding mit KI-Unterstützung entstanden. Es kann Fehler enthalten; die Nutzung erfolgt auf eigene Verantwortung.
+
 Eine deutsche Rust-TUI zum inkrementellen Archivieren der comdirect Postbox auf **Linux und Windows**. Die Anwendung lädt PDF-Dokumente unverändert herunter, sortiert sie nach Jahr und Dokumentart und prüft bereits archivierte Dokumente anhand ihrer Dokument-ID, Dateigröße und SHA-256-Prüfsumme.
 
 ## Starten
