@@ -16,7 +16,11 @@ use crate::{
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
-pub fn default_path() -> Result<PathBuf> {
+pub fn default_path(output: &Path) -> PathBuf {
+    output.join("config.json")
+}
+
+pub fn legacy_path() -> Result<PathBuf> {
     let executable =
         std::env::current_exe().context("Programmverzeichnis konnte nicht ermittelt werden")?;
     Ok(executable
@@ -45,14 +49,58 @@ impl ConfigStore {
         Self { path }
     }
 
-    pub fn archive_index_path(&self) -> Result<PathBuf> {
+    pub fn validate_path(&self) -> Result<()> {
         ensure!(
             self.path
                 .file_name()
                 .is_some_and(|name| !name.to_string_lossy().eq_ignore_ascii_case(INDEX_FILE_NAME)),
             "Konfiguration und Archivindex müssen verschiedene Dateien sein"
         );
-        Ok(self.path.with_file_name(INDEX_FILE_NAME))
+        Ok(())
+    }
+
+    pub fn migrate_from(&self, source: &Path) -> Result<()> {
+        self.validate_path()?;
+        // An existing destination always takes precedence; never replace it on migration.
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => {
+                ensure!(
+                    metadata.is_file(),
+                    "Konfiguration muss eine reguläre Datei sein"
+                );
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => {
+                return Err(error).context("Konfigurationspfad konnte nicht geprüft werden");
+            }
+        }
+        match fs::symlink_metadata(source) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).context("Bisherige Konfiguration konnte nicht geprüft werden");
+            }
+            Ok(_) => (),
+        }
+        let saved = Self::new(source.to_owned()).load()?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        private_dir(parent)?;
+        let mut temp = NamedTempFile::new_in(parent)?;
+        serde_json::to_writer_pretty(&mut temp, &saved)?;
+        temp.write_all(b"\n")?;
+        temp.as_file().sync_all()?;
+        temp.persist_noclobber(&self.path)
+            .context("Konfiguration konnte nicht ohne Überschreiben übernommen werden")?;
+        #[cfg(unix)]
+        File::open(parent)?.sync_all()?;
+        fs::remove_file(source).context(
+            "Konfiguration wurde übernommen; bisherige Datei konnte nicht entfernt werden",
+        )?;
+        Ok(())
     }
 
     pub fn load(&self) -> Result<SavedCredentials> {
@@ -179,29 +227,60 @@ mod tests {
     }
 
     #[test]
-    fn index_stays_beside_selected_config_and_cannot_replace_it() {
+    fn config_migration_preserves_credentials_and_respects_existing_destinations() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("app/config.json");
+        let legacy = ConfigStore::new(source.clone());
+        legacy.save(&credentials()).unwrap();
+        let path = default_path(&dir.path().join("postbox"));
+        let store = ConfigStore::new(path.clone());
+        store.migrate_from(&source).unwrap();
+        assert!(!source.exists());
         assert_eq!(
-            ConfigStore::new(PathBuf::from("settings/custom.json"))
-                .archive_index_path()
-                .unwrap(),
-            PathBuf::from("settings/archive-index.json")
+            store.load().unwrap().client_secret,
+            credentials().client_secret
         );
-        assert_eq!(
-            ConfigStore::new(PathBuf::from("config.json"))
-                .archive_index_path()
-                .unwrap(),
-            PathBuf::from("archive-index.json")
-        );
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains(&credentials().pin));
+        // Re-running startup neither recreates the old file nor overwrites the new one.
+        store.migrate_from(&source).unwrap();
+        legacy.save(&credentials()).unwrap();
+        let mut changed = credentials();
+        changed.username = "87654321".into();
+        store.save(&changed).unwrap();
+        store.migrate_from(&source).unwrap();
+        assert_eq!(store.load().unwrap().username, "87654321");
+        assert!(source.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn migration_preserves_invalid_input_and_rejects_index_as_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("old.json");
+        fs::write(&source, b"invalid config").unwrap();
+        let target = dir.path().join("postbox/config.json");
         assert!(
-            ConfigStore::new(PathBuf::from("archive-index.json"))
-                .archive_index_path()
+            ConfigStore::new(target.clone())
+                .migrate_from(&source)
                 .is_err()
         );
-        assert!(
-            ConfigStore::new(PathBuf::from("ARCHIVE-INDEX.JSON"))
-                .archive_index_path()
-                .is_err()
-        );
+        assert_eq!(fs::read(source).unwrap(), b"invalid config");
+        assert!(!target.exists());
+        for name in ["archive-index.json", "ARCHIVE-INDEX.JSON"] {
+            assert!(
+                ConfigStore::new(PathBuf::from(name))
+                    .validate_path()
+                    .is_err()
+            );
+        }
     }
 
     #[test]

@@ -26,7 +26,7 @@ Windows (PowerShell):
 .\target\release\comdirect-postbox-rs.exe --ziel "$HOME\Documents\comdirect"
 ```
 
-Mit `cargo run --locked -- --demo` kannst du die Übersicht ohne Bankverbindung, Zugangsdaten und Schreibzugriffe ansehen. `F5` zeigt darin einen simulierten Abschluss. `--help` zeigt die Optionen. Das Terminal sollte mindestens 64 × 22 Zeichen groß sein.
+Mit `cargo run --locked -- --demo` kannst du die Übersicht ohne Bankverbindung, Zugangsdaten und Schreibzugriffe ansehen. `F5` zeigt darin einen simulierten Abschluss. `--help` zeigt die Optionen, `-v` beziehungsweise `--version` die Programmversion. Das Terminal sollte mindestens 64 × 22 Zeichen groß sein.
 
 ## Anmeldung und Bedienung
 
@@ -49,11 +49,11 @@ Für ein bereits bei comdirect freigeschaltetes mobileTAN-Verfahren gibt es `--t
 
 Die App legt `config.json` beim ersten Start mit `F5` an, bevor eine Bankanfrage gesendet wird. Das geschieht auch dann, wenn die anschließende Anmeldung oder der Download fehlschlägt. Beim nächsten Programmstart werden die Werte automatisch geladen. Ein Abbruch vor `F5` speichert keine Änderungen.
 
-Standardmäßig liegt die Konfiguration **im selben Ordner wie die ausführbare Programmdatei**: unter Linux neben `comdirect-postbox-rs`, unter Windows neben `comdirect-postbox-rs.exe`. Der aktuelle Arbeitsordner hat darauf keinen Einfluss. Bei `cargo run --release --locked` ist der Standardpfad `target/release/config.json`, bei einem Debug-Build `target/debug/config.json`.
+Ab Version **0.5.0** liegen **`config.json` und `archive-index.json` direkt im Postbox-Ordner**, oberhalb der Kontoordner. Standardmäßig ist das `./postbox` im aktuellen Arbeitsordner. Bei `--ziel ORDNER` liegen beide Dateien in diesem Zielordner. Das gilt auch bei `cargo run`; die Dateien werden nicht mehr unter `target/debug` oder `target/release` angelegt. Der Postbox-Ordner muss beschreibbar sein.
 
-Eine bereits vorhandene Konfiguration aus einer älteren Version kannst du neben die Programmdatei kopieren oder weiter über `--config` auswählen. Das Programmverzeichnis muss zum Speichern beschreibbar sein.
+Bisher neben der Programmdatei gespeicherte Konfigurationen und Archivindizes werden beim Start automatisch übernommen, sofern am neuen Speicherort noch keine entsprechende Datei liegt. Der Index wird vor dem Umzug geprüft und seine relativen Archivpfade werden auf den neuen Speicherort umgerechnet. Dokument-IDs, Prüfsummen, fehlende PDF-Einträge und Datumsangaben bleiben erhalten. Erst nach sicherem Speichern wird die bisherige Datei entfernt. Bereits vorhandene Zieldateien haben Vorrang und werden bei der Übernahme nicht überschrieben. Die Übernahme erfolgt ohne Bankanfragen; die Offline-Demo nimmt sie nicht vor.
 
-Einen anderen Pfad kannst du mit `--config` wählen:
+Einen anderen Konfigurationspfad kannst du weiterhin ausdrücklich mit `--config` wählen. Der Archivindex bleibt dabei im Postbox-Ordner. Ein alter Index neben einer so gewählten Konfiguration wird ebenfalls übernommen, wenn im Postbox-Ordner noch keiner liegt:
 
 ```bash
 cargo run --release --locked -- --config ./config.json
@@ -69,7 +69,7 @@ Die Datei kann auch manuell als UTF-8-JSON angelegt werden. Die Schlüssel sind 
 }
 ```
 
-Das Client-Secret steht **im Klartext** in dieser Datei. Unter Linux schreibt die App sie atomar mit Dateirechten `0600`; neu angelegte Konfigurationsverzeichnisse erhalten `0700`. Unter Windows gelten die Zugriffsrechte des Zielordners. `config.json` ist durch `.gitignore` ausgeschlossen. Individuell benannte Konfigurationsdateien ebenfalls außerhalb der Versionsverwaltung aufbewahren. Beim Speichern werden genau die drei genannten Werte geschrieben, keine PIN oder TAN. Ist die Datei ungültig oder nicht beschreibbar, erfolgt keine Anmeldung. Die Offline-Demo liest oder schreibt auch bei Angabe von `--config` keine Konfigurationsdatei.
+Das Client-Secret steht **im Klartext** in dieser Datei. Unter Linux schreibt die App sie atomar mit Dateirechten `0600`; neu angelegte Konfigurationsverzeichnisse erhalten `0700`. Unter Windows gelten die Zugriffsrechte des Zielordners. `config.json` ist durch `.gitignore` ausgeschlossen. Individuell benannte Konfigurationsdateien ebenfalls außerhalb der Versionsverwaltung aufbewahren. Beim Speichern werden genau die drei genannten Werte geschrieben, keine PIN oder TAN. Ist die Datei ungültig oder nicht beschreibbar, erfolgt keine Anmeldung. Die Offline-Demo liest, schreibt und verschiebt auch bei Angabe von `--config` keine Konfigurations- oder Indexdateien.
 
 Der Konfigurationspfad hat keinen Einfluss auf die lokale Anmeldesicherung. Ein Wechsel der Konfiguration hebt diese Sicherung nicht auf.
 
@@ -84,7 +84,9 @@ HTTP `406` beim Dokumentabruf bedeutet, dass das angeforderte Antwortformat nich
 Beispiel für die Ordnerstruktur:
 
 ```text
-comdirect/
+postbox/
+  config.json
+  archive-index.json
   12345678/
     2026/
       Kontoauszuege/
@@ -101,7 +103,7 @@ Vorhandene Archive mit der früheren Ordnerkennung werden beim Start automatisch
 
 Die von comdirect gelieferten PDF-Bytes bleiben unverändert. Für einen späteren Import kannst du die PDF-Dateien direkt verwenden. **In den Dokumentordnern speichert die App ausschließlich PDFs.**
 
-Ab Version **0.4.0** speichert eine einzige Datei **`archive-index.json` neben der ausgewählten Konfigurationsdatei** die Dokument-IDs, ursprünglichen API-Metadaten einschließlich `dateCreation`, SHA-256-Prüfsummen, Größen, Archivierungszeitpunkte und PDF-Pfade. Standardmäßig liegt sie damit neben der ausführbaren Programmdatei. Auch bei `--config` folgt der Index dem Ordner der Konfiguration. Mehrere Kontoarchive und Zielordner werden in diesem gemeinsamen Index getrennt verwaltet. PIN, TAN und Tokens werden dort nicht gespeichert.
+Eine einzige Datei **`archive-index.json` direkt im Postbox-Ordner** speichert die Dokument-IDs, ursprünglichen API-Metadaten einschließlich `dateCreation`, SHA-256-Prüfsummen, Größen, Archivierungszeitpunkte und PDF-Pfade. Mehrere Kontoarchive werden in diesem gemeinsamen Index getrennt verwaltet. Jeder mit `--ziel` gewählte Postbox-Ordner besitzt seinen eigenen Index; bereits in einem übernommenen Index verzeichnete externe Archive bleiben zugeordnet. PIN, TAN und Tokens werden dort nicht gespeichert.
 
 Vorhandene `.postbox.json`-Begleitdateien werden beim nächsten Start einer Archivierung **vor der Anmeldung** automatisch in den zentralen Index übernommen. Die App prüft zunächst alle Begleitdateien des ausgewählten Kontoarchivs, speichert den Index atomar und entfernt erst danach die übernommenen Begleitdateien. Auch Einträge für inzwischen gelöschte PDFs oder online nicht mehr vorhandene Dokumente bleiben erhalten. PDFs werden dabei weder neu heruntergeladen noch verändert; ihre Datumsangaben bleiben erhalten. Nach einer Unterbrechung kann die Übernahme beim nächsten Start fortgesetzt werden. Bei beschädigten oder widersprüchlichen Metadaten erfolgt ein Abbruch vor einer Bankanfrage; die Begleitdateien bleiben bestehen.
 
@@ -144,7 +146,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Zusätzlich wird geprüft, dass die Übersicht vor jeder Downloadbestätigung ohne PDF-Anfragen wartet, ein Abbruch keinen Download auslöst und die Umbenennung vorhandener Kontoarchive die Dateidaten erhält. Tests des zentralen Index prüfen außerdem die verlustfreie und fortsetzbare Übernahme alter Begleitdateien, fehlende PDFs mit erhaltener Originalprüfsumme, beschädigte und widersprüchliche Metadaten, unsichere Pfade, getrennte Kontoarchive sowie den gemeinsamen Umzug von Index und Archiv. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
+Tests verwenden ausschließlich temporäre Verzeichnisse und einen lokalen HTTP-Testserver mit simulierten Bankantworten. Sie prüfen unter anderem den vollständigen Authentifizierungsablauf, TAN-Fehler ohne Wiederholung, Token-Refresh-Fehler, Paginierung, inkrementelle Downloads, Prüfsummen, Datumserhalt und maskierte TUI-Felder. Weitere Tests prüfen das Speichern ohne PIN, Dateirechte, das Vorbelegen der TUI und den HTTP-406-Fall bei widersprüchlichen `Accept`-Werten. Zusätzlich wird geprüft, dass die Übersicht vor jeder Downloadbestätigung ohne PDF-Anfragen wartet, ein Abbruch keinen Download auslöst und die Umbenennung vorhandener Kontoarchive die Dateidaten erhält. Weitere Tests prüfen den Umzug von Konfiguration und Index in den Postbox-Ordner einschließlich relativer und externer Archivpfade sowie bestehender Zieldateien. Tests des zentralen Index prüfen außerdem die verlustfreie und fortsetzbare Übernahme alter Begleitdateien, fehlende PDFs mit erhaltener Originalprüfsumme, beschädigte und widersprüchliche Metadaten, unsichere Pfade, getrennte Kontoarchive sowie den gemeinsamen Umzug von Index und Archiv. Die CI führt Prüfungen und Release-Builds unter Linux und Windows aus. Ein echter Kontoabruf erfordert deine Zugangsdaten und wurde nicht automatisiert getestet.
 
 Die Seitenparameter `paging-first` und `paging-count` folgen der comdirect-Paging-Konvention; die App prüft den zurückgegebenen Index und bricht bei widersprüchlichen oder wiederholten Seiten ab. Die allgemeine Paging-Konvention erläutert auch ein [Beitrag der comdirect-Fachabteilung](https://community.comdirect.de/t5/website-apps/rest-api-filter-parameter/td-p/108710/page/3).
 

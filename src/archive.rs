@@ -108,46 +108,7 @@ impl Archive {
         private_dir(parent)?;
         let parent = parent.canonicalize()?;
         let index_path = parent.join(index_path.file_name().context("Ungültiger Indexpfad")?);
-        let mut index = if regular_file_exists(&index_path)? {
-            ensure!(
-                fs::metadata(&index_path)?.len() <= MAX_INDEX_BYTES,
-                "Zentraler Archivindex ist zu groß"
-            );
-            serde_json::from_reader::<_, Index>(File::open(&index_path)?.take(MAX_INDEX_BYTES + 1))
-                .context(
-                    "Zentraler Archivindex ist beschädigt; bitte aus Sicherung wiederherstellen",
-                )?
-        } else {
-            Index {
-                schema_version: 1,
-                archives: Vec::new(),
-            }
-        };
-        ensure!(
-            index.schema_version == 1,
-            "Unbekannte Version des zentralen Archivindex"
-        );
-        let mut roots = HashSet::new();
-        for archive in &index.archives {
-            archive.root.validate()?;
-            ensure!(
-                roots.insert(serde_json::to_string(&archive.root)?),
-                "Doppelter Archivordner im zentralen Index"
-            );
-            let mut paths = HashSet::new();
-            for (id, entry) in &archive.records {
-                validate_record(&entry.record)?;
-                validate_pdf_path(&entry.path)?;
-                ensure!(
-                    id == &entry.record.document.document_id,
-                    "Widersprüchliche Dokument-ID im zentralen Index"
-                );
-                ensure!(
-                    paths.insert(&entry.path),
-                    "Mehrere Dokumente verwenden denselben PDF-Pfad"
-                );
-            }
-        }
+        let mut index = read_index(&index_path)?;
         private_dir(root)?;
         let root = root.canonicalize()?;
         let location = RootLocation::new(&root, &parent)?;
@@ -230,24 +191,7 @@ impl Archive {
     }
 
     fn save_index(&self) -> Result<()> {
-        regular_file_exists(&self.index_path)?;
-        let parent = self.index_path.parent().context("Ungültiger Indexpfad")?;
-        let mut temp = NamedTempFile::new_in(parent)
-            .context("Ordner des Archivindex ist nicht beschreibbar")?;
-        serde_json::to_writer_pretty(&mut temp, &self.index)?;
-        temp.write_all(b"\n")?;
-        ensure!(
-            temp.as_file().metadata()?.len() <= MAX_INDEX_BYTES,
-            "Zentraler Archivindex überschreitet das Größenlimit"
-        );
-        temp.as_file().sync_all()?;
-        temp.persist(&self.index_path)
-            .context("Zentraler Archivindex konnte nicht atomar gespeichert werden")?;
-        #[cfg(unix)]
-        File::open(parent)?
-            .sync_all()
-            .context("Zentraler Archivindex konnte nicht dauerhaft gesichert werden")?;
-        Ok(())
+        write_index(&self.index, &self.index_path, true)
     }
 
     fn remember(&mut self, path: &Path, record: Record) -> Result<()> {
@@ -354,6 +298,113 @@ impl Archive {
         NamedTempFile::new_in(parent).context("Archivordner ist nicht beschreibbar")?;
         Ok(path)
     }
+}
+
+/// Move the old index without changing the archives to which its paths refer.
+pub fn relocate_index(source: &Path, destination: &Path) -> Result<()> {
+    if regular_file_exists(destination)? || !regular_file_exists(source)? {
+        return Ok(());
+    }
+    let mut index = read_index(source)?;
+    let old_parent = source
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()?;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    private_dir(parent)?;
+    let new_parent = parent.canonicalize()?;
+    for archive in &mut index.archives {
+        let root = match &archive.root {
+            RootLocation::Relative(path) => old_parent.join(path),
+            RootLocation::Absolute(path) => path.clone(),
+        };
+        archive.root = RootLocation::new(&root, &new_parent)?;
+        archive.root.validate()?;
+    }
+    write_index(
+        &index,
+        &new_parent.join(destination.file_name().context("Ungültiger Indexpfad")?),
+        false,
+    )?;
+    fs::remove_file(source).context(
+        "Archivindex wurde übernommen; bisherige Indexdatei konnte nicht entfernt werden",
+    )?;
+    Ok(())
+}
+
+fn read_index(index_path: &Path) -> Result<Index> {
+    let index = if regular_file_exists(index_path)? {
+        ensure!(
+            fs::metadata(index_path)?.len() <= MAX_INDEX_BYTES,
+            "Zentraler Archivindex ist zu groß"
+        );
+        serde_json::from_reader::<_, Index>(File::open(index_path)?.take(MAX_INDEX_BYTES + 1))
+            .context("Zentraler Archivindex ist beschädigt; bitte aus Sicherung wiederherstellen")?
+    } else {
+        Index {
+            schema_version: 1,
+            archives: Vec::new(),
+        }
+    };
+    ensure!(
+        index.schema_version == 1,
+        "Unbekannte Version des zentralen Archivindex"
+    );
+    let mut roots = HashSet::new();
+    for archive in &index.archives {
+        archive.root.validate()?;
+        ensure!(
+            roots.insert(serde_json::to_string(&archive.root)?),
+            "Doppelter Archivordner im zentralen Index"
+        );
+        let mut paths = HashSet::new();
+        for (id, entry) in &archive.records {
+            validate_record(&entry.record)?;
+            validate_pdf_path(&entry.path)?;
+            ensure!(
+                id == &entry.record.document.document_id,
+                "Widersprüchliche Dokument-ID im zentralen Index"
+            );
+            ensure!(
+                paths.insert(&entry.path),
+                "Mehrere Dokumente verwenden denselben PDF-Pfad"
+            );
+        }
+    }
+    Ok(index)
+}
+
+fn write_index(index: &Index, path: &Path, replace: bool) -> Result<()> {
+    regular_file_exists(path)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temp =
+        NamedTempFile::new_in(parent).context("Ordner des Archivindex ist nicht beschreibbar")?;
+    serde_json::to_writer_pretty(&mut temp, index)?;
+    temp.write_all(b"\n")?;
+    ensure!(
+        temp.as_file().metadata()?.len() <= MAX_INDEX_BYTES,
+        "Zentraler Archivindex überschreitet das Größenlimit"
+    );
+    temp.as_file().sync_all()?;
+    if replace {
+        temp.persist(path)
+            .context("Zentraler Archivindex konnte nicht atomar gespeichert werden")?;
+    } else {
+        temp.persist_noclobber(path)
+            .context("Archivindex konnte nicht ohne Überschreiben übernommen werden")?;
+    }
+    #[cfg(unix)]
+    File::open(parent)?
+        .sync_all()
+        .context("Zentraler Archivindex konnte nicht dauerhaft gesichert werden")?;
+    Ok(())
 }
 
 fn record(doc: &Document, bytes: &[u8]) -> Record {
@@ -712,6 +763,74 @@ mod tests {
                 .unwrap(),
             modified
         );
+    }
+
+    #[test]
+    fn moving_index_into_postbox_keeps_relative_external_and_missing_pdf_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        let output = app.join("postbox");
+        let root = output.join("12345678");
+        let external = dir.path().join("external/87654321");
+        let source = app.join(INDEX_FILE_NAME);
+        let destination = output.join(INDEX_FILE_NAME);
+        let mut archive = Archive::open(&root, &source).unwrap();
+        let pdf = archive.store(&doc(), PDF).unwrap();
+        let original_time = fs::metadata(&pdf).unwrap().modified().unwrap();
+        let mut missing = doc();
+        missing.document_id = "missing".into();
+        let deleted = archive.store(&missing, PDF).unwrap();
+        fs::remove_file(deleted).unwrap();
+        let original_record = archive.records()["missing"].record.clone();
+        drop(archive);
+        let mut other = Archive::open(&external, &source).unwrap();
+        other.store(&doc(), PDF).unwrap();
+        drop(other);
+        relocate_index(&source, &destination).unwrap();
+        assert!(!source.exists());
+        let mut archive = Archive::open(&root, &destination).unwrap();
+        let mut changed = doc();
+        changed.name = "Changed bank title".into();
+        assert!(archive.exists_verified(&changed).unwrap());
+        assert_eq!(
+            fs::metadata(pdf).unwrap().modified().unwrap(),
+            original_time
+        );
+        assert!(!archive.exists_verified(&missing).unwrap());
+        assert!(archive.records()["missing"].record == original_record);
+        assert!(
+            archive
+                .store(&missing, b"%PDF-1.4\ndifferent\n%%EOF")
+                .is_err()
+        );
+        assert_eq!(archive.index.archives.len(), 2);
+        assert!(
+            matches!(&archive.index.archives[0].root, RootLocation::Relative(path) if path == "12345678")
+        );
+        drop(archive);
+        let mut other = Archive::open(&external, &destination).unwrap();
+        assert!(other.exists_verified(&doc()).unwrap());
+        assert_eq!(other.index.archives.len(), 2);
+        assert_only_pdfs(&root);
+        // Startup after a successful move remains a no-op for the old location.
+        relocate_index(&source, &destination).unwrap();
+        assert!(!source.exists());
+    }
+
+    #[test]
+    fn index_move_preserves_sources_on_invalid_input_or_existing_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("old-index.json");
+        let destination = dir.path().join("postbox").join(INDEX_FILE_NAME);
+        fs::write(&source, b"broken index").unwrap();
+        assert!(relocate_index(&source, &destination).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"broken index");
+        assert!(!destination.exists());
+        private_dir(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"existing destination").unwrap();
+        relocate_index(&source, &destination).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"broken index");
+        assert_eq!(fs::read(&destination).unwrap(), b"existing destination");
     }
 
     #[test]

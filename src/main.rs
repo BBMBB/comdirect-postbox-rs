@@ -36,7 +36,7 @@ struct Args {
         hide_default_value = true
     )]
     output: PathBuf,
-    /// Konfigurationsdatei (Standard: config.json neben der ausführbaren Datei)
+    /// Konfigurationsdatei (Standard: config.json im Archivordner aus --ziel)
     #[arg(long, value_name = "DATEI")]
     config: Option<PathBuf>,
     /// TAN-Verfahren: push (Standard, photoTAN-App) oder sms (mobileTAN, falls freigeschaltet)
@@ -59,7 +59,7 @@ struct Args {
     #[arg(short = 'h', long, action = clap::ArgAction::Help)]
     help: Option<bool>,
     /// Version anzeigen
-    #[arg(short = 'V', long, action = clap::ArgAction::Version)]
+    #[arg(short = 'v', long, action = clap::ArgAction::Version)]
     version: Option<bool>,
 }
 
@@ -85,11 +85,21 @@ fn run() -> Result<()> {
         let directories = ProjectDirs::from("de", "comdirect-postbox-rs", "comdirect-postbox-rs")
             .context("Lokales Anwendungsverzeichnis nicht verfügbar")?;
         let state = Arc::new(safety::Safety::open(directories.data_local_dir())?);
+        let legacy_config = match &args.config {
+            Some(path) => path.clone(),
+            None => config::legacy_path()?,
+        };
         let config_path = match args.config {
             Some(path) => path,
-            None => config::default_path()?,
+            None => config::default_path(&args.output),
         };
         let config = config::ConfigStore::new(config_path);
+        config.validate_path()?;
+        archive::relocate_index(
+            &legacy_config.with_file_name(archive::INDEX_FILE_NAME),
+            &args.output.join(archive::INDEX_FILE_NAME),
+        )?;
+        config.migrate_from(&legacy_config)?;
         (Some(state), Some(config))
     };
     tui::run(args.output, args.tan, args.unlock, args.demo, state, config)

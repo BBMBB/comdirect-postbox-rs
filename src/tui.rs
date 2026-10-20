@@ -17,6 +17,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     api::{Credentials, TanMethod},
+    archive::INDEX_FILE_NAME,
     config::ConfigStore,
     safety::Safety,
     sync::{Command, DocumentRow, Inventory, Update, Worker},
@@ -118,7 +119,7 @@ impl App {
     }
 
     fn configure(&mut self, store: ConfigStore) -> Result<()> {
-        store.archive_index_path()?;
+        store.validate_path()?;
         let mut saved = store.load()?;
         if matches!(self.screen, Screen::Unlock) {
             *self.inputs[0] = std::mem::take(&mut saved.username);
@@ -223,7 +224,7 @@ impl App {
                 "F5: Abschließen · ↑/↓: Dokument wählen · Esc / Q: Beenden"
             }
             Screen::Overview { .. } => "F5: Downloads starten · ↑/↓: Auswahl · Esc / Q: Beenden",
-            Screen::Busy => "↑/↓: Dokument wählen  ·  Esc / Q: Sicher abbrechen",
+            Screen::Busy => "↑/↓: Dokument wählen  ·  Esc / Q: Abbrechen",
             Screen::Finished => "↑/↓: Dokument wählen  ·  Esc / Q: Beenden",
         };
         frame.render_widget(
@@ -605,11 +606,7 @@ fn event_loop(
                             continue;
                         }
                         let state = safety.as_ref().context("Lokaler Zustand fehlt")?.clone();
-                        let index_path = app
-                            .config
-                            .as_ref()
-                            .context("Konfiguration fehlt")?
-                            .archive_index_path()?;
+                        let index_path = app.output.join(INDEX_FILE_NAME);
                         if let Some(store) = &app.config
                             && let Err(error) = store.save(&credentials)
                         {
