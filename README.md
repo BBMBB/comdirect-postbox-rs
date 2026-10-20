@@ -6,6 +6,8 @@ Die Idee zu diesem Projekt stammt von [senshi-x/ComdirectPostboxDownloader](http
 
 Eine deutsche Rust-TUI zum inkrementellen Archivieren der comdirect Postbox auf **Linux und Windows**. Die Anwendung lädt PDF-Dokumente unverändert herunter, sortiert sie nach Jahr und Dokumentart und prüft bereits archivierte Dokumente anhand ihrer Dokument-ID, Dateigröße und SHA-256-Prüfsumme.
 
+![Bestandsübersicht der TUI mit Beispieldaten aus der Offline-Demo](docs/images/TUI.png)
+
 ## Starten
 
 Zum Bauen benötigst du eine aktuelle stabile Rust-Toolchain mit Cargo, unter Windows gegebenenfalls die C++ Build Tools für das MSVC-Target. Fertige Programme werden von der GitHub-Actions-Pipeline für Linux und Windows als Artefakte bereitgestellt.
