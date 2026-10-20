@@ -1,0 +1,12 @@
+/target/
+/postbox/
+*.pdf
+*.PDF
+.env
+.env.*
+*.part
+*.postbox.json
+auth-*.pending
+*.lockfile
+config.json
+archive-index.json
